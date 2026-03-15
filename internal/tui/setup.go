@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -18,7 +17,7 @@ type setupState int
 
 const (
 	setupSelectProvider setupState = iota // pick from list
-	setupOAuthWaiting                     // browser opened, OAuth callback pending
+	setupCLIProbing                       // running `claude` liveness probe
 	setupKeyInput                         // paste/type API key
 	setupLocalConfig                      // configure base URL for local providers
 	setupVerifying                        // checking / saving credential
@@ -32,11 +31,10 @@ type setupVerifyMsg struct {
 	ok  bool
 	err error
 }
-type oauthCompleteMsg struct {
-	accessToken  string
-	refreshToken string
+type cliProbeMsg struct {
+	cliPath string
+	err     error
 }
-type oauthErrMsg struct{ err error }
 
 // ─── Model ───────────────────────────────────────────────────────────────────
 
@@ -48,7 +46,7 @@ type setupModel struct {
 	input     textinput.Model
 	spinner   spinner.Model
 	err       error
-	authURL   string // displayed while waiting for OAuth
+	cliPath   string // resolved path after successful CLI probe
 }
 
 func newSetupModel(workspace string) setupModel {
@@ -72,40 +70,25 @@ func newSetupModel(workspace string) setupModel {
 
 // ─── Commands ────────────────────────────────────────────────────────────────
 
-// startOAuthFlow starts the local callback server, opens the browser,
-// and waits for the token in a goroutine — sending a message when done.
-func startOAuthFlow() tea.Cmd {
+// probeCLI runs a live liveness check against the local `claude` binary.
+// This is the Paperclip approach: no OAuth, no browser — just verify the CLI works.
+func probeCLI() tea.Cmd {
 	return func() tea.Msg {
-		flow, err := auth.NewOAuthFlow()
-		if err != nil {
-			return oauthErrMsg{err}
-		}
-		if err := flow.Start(); err != nil {
-			return oauthErrMsg{fmt.Errorf("could not open browser: %w", err)}
-		}
-
-		// Wait for callback in background — this blocks until auth completes or times out.
-		result, err := flow.Wait(context.Background())
-		if err != nil {
-			return oauthErrMsg{err}
-		}
-		return oauthCompleteMsg{
-			accessToken:  result.AccessToken,
-			refreshToken: result.RefreshToken,
-		}
+		result := auth.ClaudeProbe()
+		return cliProbeMsg{cliPath: result.CLIPath, err: result.Err}
 	}
 }
 
-func saveOAuthResult(workspace string, p auth.Provider, accessToken, refreshToken string) tea.Cmd {
+// saveCLIProvider stores the claude-code provider config (no token needed —
+// the CLI handles auth itself via ~/.claude/ or ANTHROPIC_API_KEY).
+func saveCLIProvider(workspace string, p auth.Provider, cliPath string) tea.Cmd {
 	return func() tea.Msg {
-		result := auth.OAuthResult{
-			AccessToken:  accessToken,
-			RefreshToken: refreshToken,
-		}
-		if err := auth.SaveOAuth(workspace, p.ID, result); err != nil {
+		// Store the resolved CLI path as the credential value so the LLM
+		// runner knows which binary to spawn.
+		cred := auth.Credential{ProviderID: p.ID, Value: cliPath}
+		if err := auth.Save(workspace, cred); err != nil {
 			return setupVerifyMsg{ok: false, err: err}
 		}
-		cred := auth.Credential{ProviderID: p.ID, Value: accessToken}
 		if err := auth.SetActiveProvider(workspace, p.ID, cred); err != nil {
 			return setupVerifyMsg{ok: false, err: err}
 		}
@@ -153,8 +136,8 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, navigateTo(screenHome)
 			}
 
-		case setupOAuthWaiting:
-			// User can only cancel while waiting
+		case setupCLIProbing:
+			// User can only cancel while the probe is running
 			switch msg.String() {
 			case "esc", "q":
 				m.state = setupSelectProvider
@@ -201,20 +184,21 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	// ── OAuth messages ────────────────────────────────────────────────────────
+	// ── CLI probe result ──────────────────────────────────────────────────────
 
-	case oauthCompleteMsg:
-		// Browser flow completed — save and finish
+	case cliProbeMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			m.state = setupFailed
+			return m, nil
+		}
+		// Probe passed — save config
+		m.cliPath = msg.cliPath
 		m.state = setupVerifying
 		return m, tea.Batch(
 			m.spinner.Tick,
-			saveOAuthResult(m.workspace, m.provider, msg.accessToken, msg.refreshToken),
+			saveCLIProvider(m.workspace, m.provider, msg.cliPath),
 		)
-
-	case oauthErrMsg:
-		m.err = msg.err
-		m.state = setupFailed
-		return m, nil
 
 	// ── Save result ───────────────────────────────────────────────────────────
 
@@ -245,18 +229,10 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m setupModel) transitionToAuth() (tea.Model, tea.Cmd) {
 	switch m.provider.AuthType {
-	case auth.AuthTypeBrowser:
-		// Build the OAuth URL to display while waiting
-		flow, err := auth.NewOAuthFlow()
-		if err != nil {
-			m.err = err
-			m.state = setupFailed
-			return m, nil
-		}
-		m.authURL = flow.AuthURL
-		m.state = setupOAuthWaiting
-		// Start the full OAuth flow (opens browser + waits for callback)
-		return m, tea.Batch(m.spinner.Tick, startOAuthFlow())
+	case auth.AuthTypeCLI:
+		// Paperclip approach: no browser, no token — just probe the local CLI.
+		m.state = setupCLIProbing
+		return m, tea.Batch(m.spinner.Tick, probeCLI())
 
 	case auth.AuthTypeAPIKey:
 		m.state = setupKeyInput
@@ -284,8 +260,8 @@ func (m setupModel) View() string {
 	switch m.state {
 	case setupSelectProvider:
 		body = m.viewSelectProvider()
-	case setupOAuthWaiting:
-		body = m.viewOAuthWaiting()
+	case setupCLIProbing:
+		body = m.viewCLIProbing()
 	case setupKeyInput:
 		body = m.viewKeyInput()
 	case setupLocalConfig:
@@ -309,8 +285,8 @@ func (m setupModel) viewSelectProvider() string {
 	for i, p := range auth.AllProviders {
 		var authBadge string
 		switch p.AuthType {
-		case auth.AuthTypeBrowser:
-			authBadge = badgeBlue.Render(" OAuth ")
+		case auth.AuthTypeCLI:
+			authBadge = badgeBlue.Render(" cli ")
 		case auth.AuthTypeAPIKey:
 			authBadge = badgeGray.Render(" api key ")
 		case auth.AuthTypeLocal:
@@ -340,20 +316,16 @@ func (m setupModel) viewSelectProvider() string {
 	return lipgloss.JoinVertical(lipgloss.Left, title, sub, "", card, "", hint)
 }
 
-func (m setupModel) viewOAuthWaiting() string {
-	p := m.provider
+func (m setupModel) viewCLIProbing() string {
 	spin := m.spinner.View()
-
-	title := primaryText.Render("Connecting to " + p.Name)
+	title := primaryText.Render("Checking Claude Code CLI…")
 
 	steps := cardStyle.Render(
-		sectionTitle.Render("OAUTH FLOW") + "\n\n" +
-			successText.Render("✓") + "  " + lipgloss.NewStyle().Foreground(colorText).Render("Local callback server started on port 38787") + "\n\n" +
-			successText.Render("✓") + "  " + lipgloss.NewStyle().Foreground(colorText).Render("Browser opened → log in to "+p.Name) + "\n\n" +
-			spin + "  " + primaryText.Render("Waiting for authorization…") + "\n" +
-			muted.Render("   (authorize in the browser window, then return here)") + "\n\n" +
-			dimText.Render("  If the browser didn't open, visit:") + "\n" +
-			lipgloss.NewStyle().Foreground(colorPrimary).Width(62).Render("  "+m.authURL),
+		sectionTitle.Render("CLI PROBE") + "\n\n" +
+			spin + "  " + primaryText.Render("Running liveness check…") + "\n" +
+			muted.Render("   claude --print - --output-format stream-json --verbose") + "\n\n" +
+			dimText.Render("  Auth is handled by your existing `claude` setup.") + "\n" +
+			dimText.Render("  If this hangs, run `claude` first to complete auth."),
 	)
 
 	hint := helpBar("esc", "cancel")
@@ -386,7 +358,7 @@ func (m setupModel) viewDone() string {
 	p := m.provider
 	check := successText.Render("✓  " + p.Name + " connected")
 
-	authMethod := "OAuth token"
+	authMethod := "CLI (existing claude auth)"
 	if p.AuthType == auth.AuthTypeAPIKey {
 		authMethod = "API key"
 	} else if p.AuthType == auth.AuthTypeLocal {

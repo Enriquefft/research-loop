@@ -5,8 +5,10 @@ package auth
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Provider represents a supported LLM/agent provider.
@@ -25,9 +27,10 @@ type Provider struct {
 type AuthType int
 
 const (
-	AuthTypeBrowser AuthType = iota // open browser → paste token back
+	AuthTypeBrowser AuthType = iota // open browser → paste token back (unused for Claude)
 	AuthTypeAPIKey                  // paste key directly
 	AuthTypeLocal                   // no auth needed (Ollama, LM Studio)
+	AuthTypeCLI                     // spawn local CLI — auth already handled by the CLI itself
 )
 
 // Credential holds a saved provider credential.
@@ -42,9 +45,8 @@ var AllProviders = []Provider{
 	{
 		ID:           "claude-code",
 		Name:         "Claude Code",
-		Description:  "Anthropic's Claude via your claude.ai account",
-		AuthType:     AuthTypeBrowser,
-		AuthURL:      "https://claude.ai/settings/profile",
+		Description:  "Spawns the local `claude` CLI — uses your existing claude auth",
+		AuthType:     AuthTypeCLI,
 		KeyEnv:       "ANTHROPIC_API_KEY",
 		KeyLabel:     "API Key",
 		DefaultModel: "claude-sonnet-4-5",
@@ -102,6 +104,47 @@ func ProviderByID(id string) (Provider, bool) {
 		}
 	}
 	return Provider{}, false
+}
+
+// ─── CLI probe ────────────────────────────────────────────────────────────────
+
+// ClaudeProbeResult describes the outcome of a live claude CLI check.
+type ClaudeProbeResult struct {
+	CLIPath string // resolved path to the claude binary
+	Err     error  // nil = CLI found and responsive
+}
+
+// ClaudeProbe checks whether the `claude` CLI is installed and responsive.
+// It runs: claude --print - --output-format stream-json --verbose
+// with the prompt "Respond with hello." — the same liveness probe Paperclip uses.
+func ClaudeProbe() ClaudeProbeResult {
+	path, err := exec.LookPath("claude")
+	if err != nil {
+		return ClaudeProbeResult{Err: fmt.Errorf("`claude` not found on PATH — install Claude Code CLI first: https://claude.ai/download")}
+	}
+
+	cmd := exec.Command(path,
+		"--print", "-",
+		"--output-format", "stream-json",
+		"--verbose",
+	)
+	cmd.Stdin = strings.NewReader("Respond with hello.")
+
+	// Give it 30 seconds to respond
+	done := make(chan error, 1)
+	go func() { _, err := cmd.Output(); done <- err }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			return ClaudeProbeResult{CLIPath: path, Err: fmt.Errorf("claude CLI probe failed: %w", err)}
+		}
+	case <-time.After(30 * time.Second):
+		_ = cmd.Process.Kill()
+		return ClaudeProbeResult{CLIPath: path, Err: fmt.Errorf("claude CLI did not respond within 30 s — check your auth: run `claude` first")}
+	}
+
+	return ClaudeProbeResult{CLIPath: path}
 }
 
 // ─── Credential storage ───────────────────────────────────────────────────────
