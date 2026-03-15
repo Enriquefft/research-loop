@@ -1,0 +1,16 @@
+# Go binary
+research-loop
+
+# Node
+agent-sdk/node_modules/
+agent-sdk/dist/
+
+# macOS
+.DS_Store
+
+# Secrets
+.env
+*.env
+
+# Research Loop runtime state (optional — some teams commit these)
+# .research-loop/library/papers/*.pdf
