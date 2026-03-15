@@ -184,32 +184,11 @@ The `learn` skill activates mid-flow and teaches the concept, then hands control
 
 Fellows (autonomous scheduled agents), the full 4-pane TUI, PDF ingestion pipeline, MCP bridge improvements, and the bundle registry are in active development. See [ROADMAP.md](ROADMAP.md) for the full plan.
 
-## References & Acknowledgements
+## References
 
-**Nicholas Carlini — "How to win a best paper award"**
-The Carlini gate in Research Loop is directly inspired by Nicholas Carlini's framework for evaluating whether a research idea is worth pursuing. The four axes — taste, uniqueness, impact, feasibility — are a distillation of his writing on what separates important research from marginal work.
-
-> *"The single most important skill to develop for high-impact research is good taste in what problems are worth solving. If you have good taste, and you keep writing papers, eventually you'll write one with exceptionally high impact. But if you have bad taste, you could write a hundred papers and never do anything of consequence."*
->
-> — Nicholas Carlini, [How to win a best paper award](https://nicholas.carlini.com/writing/2026/how-to-win-a-best-paper-award.html)
-
-Key ideas we borrowed:
-- **Taste** — does this problem matter? Would solving it change the field?
-- **Uniqueness** — what can you specifically bring that others can't? Find your comparative advantage.
-- **Impact** — write the best-case conclusion before running a single experiment. If you have nothing compelling to say, drop the project.
-- **Feasibility** — fail fast. Start with the sub-problem most likely to fail. Don't build the polished version when a prototype tells you whether the core idea works.
-- **Kill papers ruthlessly** — sunk cost is not a reason to continue. Pivot immediately to something more important when it appears.
-
-**Ihtesham Ali — on how to actually learn a field**
-The `learn` skill's structure is inspired by [this thread](https://x.com/ihtesham2005/status/2030214970353602806) about the difference between reading a subject and understanding it. The core insight: instead of asking an AI to summarize, ask it what mental models experts share, where they fundamentally disagree, and what questions would expose whether someone truly understands versus memorized. Then answer those questions yourself. Every wrong answer tells you something.
-
-## Special Thanks
-
-**[Jesse Vincent](https://github.com/obra) — [Superpowers](https://github.com/obra/superpowers)**
-
-Research Loop's skill architecture is built on patterns Jesse developed for Superpowers — a complete software development workflow for coding agents. Specifically: the `<SUBAGENT-STOP>` convention that lets subagents skip advisor flows and just do work, the `<HARD-GATE>` pattern for non-negotiable rules, the principle that skill descriptions should describe *when to load* rather than *what the skill does*, and the rationalization tables that make rules stick under pressure.
-
-If you find Research Loop useful for your work, go star [Superpowers](https://github.com/obra/superpowers) — the skill system wouldn't exist in its current form without it.
+- **Carlini gate** — [Nicholas Carlini, "How to win a best paper award"](https://nicholas.carlini.com/writing/2026/how-to-win-a-best-paper-award.html). The four axes (taste, uniqueness, impact, feasibility) come directly from his framework.
+- **learn skill** — inspired by [this thread](https://x.com/ihtesham2005/status/2030214970353602806) by Ihtesham Ali on the difference between reading a subject and understanding it.
+- **Skill architecture** — `<SUBAGENT-STOP>`, `<HARD-GATE>`, and the description conventions are borrowed from [Superpowers](https://github.com/obra/superpowers) by Jesse Vincent.
 
 ## Contributing
 
