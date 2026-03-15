@@ -25,6 +25,7 @@ type homeMenuItem struct {
 }
 
 var homeMenuItems = []homeMenuItem{
+	{"  Setup provider", "Connect Claude Code, Codex, Gemini, Ollama, and more", screenSetup},
 	{"  Start new investigation", "Ingest a paper and extract a hypothesis", screenIngest},
 	{"  Browse sessions", "View and resume existing research sessions", screenSessions},
 	{"  Live dashboard", "Monitor running experiments in real time", screenDashboard},

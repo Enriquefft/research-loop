@@ -15,6 +15,7 @@ type screen int
 
 const (
 	screenHome screen = iota
+	screenSetup
 	screenIngest
 	screenSessions
 	screenDashboard
@@ -40,6 +41,7 @@ type rootModel struct {
 
 	// Sub-models (one per screen)
 	home      homeModel
+	setup     setupModel
 	ingest    ingestModel
 	sessions  sessionsModel
 	dashboard dashboardModel
@@ -51,6 +53,7 @@ func newRootModel(workspace string, cfg *config.Config) rootModel {
 		workspace: workspace,
 		cfg:       cfg,
 		home:      newHomeModel(),
+		setup:     newSetupModel(workspace),
 		ingest:    newIngestModel(workspace, cfg),
 		sessions:  newSessionsModel(workspace),
 		dashboard: newDashboardModel(workspace),
@@ -77,6 +80,9 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if nav, ok := msg.(navMsg); ok {
 		m.current = nav.to
 		switch nav.to {
+		case screenSetup:
+			m.setup = newSetupModel(m.workspace)
+			return m, m.setup.Init()
 		case screenIngest:
 			m.ingest = newIngestModel(m.workspace, m.cfg)
 			return m, m.ingest.Init()
@@ -101,6 +107,10 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		updated, c := m.home.Update(msg)
 		m.home = updated.(homeModel)
 		cmd = c
+	case screenSetup:
+		updated, c := m.setup.Update(msg)
+		m.setup = updated.(setupModel)
+		cmd = c
 	case screenIngest:
 		updated, c := m.ingest.Update(msg)
 		m.ingest = updated.(ingestModel)
@@ -121,6 +131,8 @@ func (m rootModel) View() string {
 	switch m.current {
 	case screenHome:
 		return m.home.View()
+	case screenSetup:
+		return m.setup.View()
 	case screenIngest:
 		return m.ingest.View()
 	case screenSessions:

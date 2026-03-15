@@ -11,6 +11,7 @@ agent-sdk/dist/
 # Secrets
 .env
 *.env
+.research-loop/credentials.toml
 
 # Research Loop runtime state (optional — some teams commit these)
 # .research-loop/library/papers/*.pdf
