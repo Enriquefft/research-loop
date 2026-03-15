@@ -19,18 +19,28 @@ import (
 )
 
 // ─── Anthropic OAuth constants ────────────────────────────────────────────────
-// These are the same endpoints Claude Code itself uses.
+// These are the exact values extracted from the Claude Code CLI binary (v2.1.76).
+// Verified by inspecting the minified JS bundle in the Bun-compiled binary.
 
 const (
-	anthropicAuthURL  = "https://claude.ai/oauth/authorize"
-	anthropicTokenURL = "https://claude.ai/oauth/token"
+	// Authorization endpoint on claude.ai (CLAUDE_AI_AUTHORIZE_URL)
+	anthropicAuthURL = "https://claude.ai/oauth/authorize"
 
-	// Claude Code's public client ID — same one used by Claude Code CLI.
-	// This is intentionally public (PKCE replaces client secret for public clients).
+	// Token endpoint on platform.claude.com (TOKEN_URL)
+	anthropicTokenURL = "https://platform.claude.com/v1/oauth/token"
+
+	// Claude Code's public client ID — extracted from the production config
+	// block in the CLI binary. Public clients use PKCE instead of a secret.
+	// Can be overridden at runtime via CLAUDE_CODE_OAUTH_CLIENT_ID env var.
 	claudeCodeClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 
-	// Scopes needed to use the Claude API on behalf of the user.
-	claudeCodeScope = "openid profile email claude:read claude:write"
+	// CLAUDE_AI_OAUTH_SCOPES — exact scopes used by the Claude Code CLI for
+	// claude.ai login. No OIDC scopes (openid/profile/email) — Anthropic uses
+	// custom user: and org: scope prefixes.
+	claudeCodeScope = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
+
+	// Required beta header for OAuth endpoints (OAUTH_BETA_HEADER)
+	oauthBetaHeader = "oauth-2025-04-20"
 
 	// Local callback server — registered as allowed redirect URI for public clients.
 	callbackPort = 38787
@@ -201,6 +211,7 @@ func (f *OAuthFlow) exchangeCode(ctx context.Context, code string) (OAuthResult,
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Anthropic-Beta", oauthBetaHeader)
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
@@ -265,6 +276,7 @@ func RefreshAccessToken(refreshToken string) (OAuthResult, error) {
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Anthropic-Beta", oauthBetaHeader)
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
