@@ -25,9 +25,11 @@ type homeMenuItem struct {
 }
 
 var homeMenuItems = []homeMenuItem{
+	{"  Explore problem", "MIT grad student: mental models, debates, Carlini scoring", screenExplore},
 	{"  Setup provider", "Connect Claude Code, Codex, Gemini, Ollama, and more", screenSetup},
 	{"  Start new investigation", "Ingest a paper and extract a hypothesis", screenIngest},
 	{"  Browse sessions", "View and resume existing research sessions", screenSessions},
+	{"  Parallel discovery", "Run multiple research lanes with Carlini gates", screenDiscovery},
 	{"  Live dashboard", "Monitor running experiments in real time", screenDashboard},
 	{"  Quit", "Exit Research Loop", screenQuit},
 }

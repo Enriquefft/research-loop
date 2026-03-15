@@ -19,6 +19,8 @@ const (
 	screenIngest
 	screenSessions
 	screenDashboard
+	screenDiscovery
+	screenExplore
 	screenQuit
 )
 
@@ -45,6 +47,8 @@ type rootModel struct {
 	ingest    ingestModel
 	sessions  sessionsModel
 	dashboard dashboardModel
+	discovery discoveryModel
+	explore   exploreModel
 }
 
 func newRootModel(workspace string, cfg *config.Config) rootModel {
@@ -57,6 +61,8 @@ func newRootModel(workspace string, cfg *config.Config) rootModel {
 		ingest:    newIngestModel(workspace, cfg),
 		sessions:  newSessionsModel(workspace),
 		dashboard: newDashboardModel(workspace),
+		discovery: newDiscoveryModel(workspace),
+		explore:   newExploreModel(workspace),
 	}
 }
 
@@ -92,6 +98,12 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case screenDashboard:
 			m.dashboard = newDashboardModel(m.workspace)
 			return m, m.dashboard.Init()
+		case screenDiscovery:
+			m.discovery = newDiscoveryModel(m.workspace)
+			return m, m.discovery.Init()
+		case screenExplore:
+			m.explore = newExploreModel(m.workspace)
+			return m, m.explore.Init()
 		case screenHome:
 			m.home = newHomeModel()
 			return m, m.home.Init()
@@ -123,6 +135,14 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		updated, c := m.dashboard.Update(msg)
 		m.dashboard = updated.(dashboardModel)
 		cmd = c
+	case screenDiscovery:
+		updated, c := m.discovery.Update(msg)
+		m.discovery = updated.(discoveryModel)
+		cmd = c
+	case screenExplore:
+		updated, c := m.explore.Update(msg)
+		m.explore = updated.(exploreModel)
+		cmd = c
 	}
 	return m, cmd
 }
@@ -139,6 +159,10 @@ func (m rootModel) View() string {
 		return m.sessions.View()
 	case screenDashboard:
 		return m.dashboard.View()
+	case screenDiscovery:
+		return m.discovery.View()
+	case screenExplore:
+		return m.explore.View()
 	}
 	return ""
 }

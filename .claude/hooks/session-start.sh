@@ -1,52 +1,57 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Research Loop — SessionStart hook
-# Injects active session context into every Claude Code session in this workspace.
-# Claude Code reads stdout from this hook and adds it to the conversation context.
+# Injects research superpowers + active session state into every Claude Code session.
+
+set -euo pipefail
 
 WORKSPACE_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
-SESSIONS_DIR="$WORKSPACE_DIR/.research-loop/sessions"
+STATE_DIR="${WORKSPACE_DIR}/.research-loop"
 
-if [ ! -d "$SESSIONS_DIR" ]; then
-  exit 0
+# Read entry-point skill
+SKILL_CONTENT=$(cat "${WORKSPACE_DIR}/.claude/skills/research-loop/SKILL.md" 2>/dev/null || echo "")
+
+# Build session context
+session_context=""
+if [ -d "${STATE_DIR}/sessions" ]; then
+  LATEST=$(ls -t "${STATE_DIR}/sessions" 2>/dev/null | head -1)
+  if [ -n "$LATEST" ]; then
+    NOTEBOOK="${STATE_DIR}/sessions/${LATEST}/lab_notebook.md"
+    if [ -f "$NOTEBOOK" ]; then
+      # Get last status line and run count
+      LAST_STATUS=$(grep "^## Status" -A2 "$NOTEBOOK" 2>/dev/null | tail -1 | sed 's/^[[:space:]]*//' || echo "")
+      RUN_COUNT=$(grep -c "^## Run #" "$NOTEBOOK" 2>/dev/null || echo "0")
+      TOPIC=$(grep "^# Lab Notebook" "$NOTEBOOK" 2>/dev/null | sed 's/# Lab Notebook — //' || echo "$LATEST")
+      session_context="ACTIVE SESSION: ${TOPIC}\nLast status: ${LAST_STATUS}\nExperiment runs logged: ${RUN_COUNT}\nLab notebook: .research-loop/sessions/${LATEST}/lab_notebook.md\nTo resume: /resume"
+    else
+      session_context="ACTIVE SESSION: ${LATEST} (no lab notebook yet)"
+    fi
+  fi
 fi
 
-# Find the most recent session
-LATEST_SESSION=$(ls -t "$SESSIONS_DIR" 2>/dev/null | head -1)
-if [ -z "$LATEST_SESSION" ]; then
-  exit 0
+if [ -z "$session_context" ]; then
+  session_context="No active sessions. Just tell me what you want to research or understand."
 fi
 
-SESSION_PATH="$SESSIONS_DIR/$LATEST_SESSION"
-HYPOTHESIS_FILE="$SESSION_PATH/hypothesis.md"
-KG_FILE="$SESSION_PATH/knowledge_graph.md"
+escape_for_json() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
+  printf '%s' "$s"
+}
 
-if [ ! -f "$HYPOTHESIS_FILE" ]; then
-  exit 0
-fi
+SKILL_ESCAPED=$(escape_for_json "$SKILL_CONTENT")
+SESSION_ESCAPED=$(escape_for_json "$session_context")
 
-# Read the core claim from hypothesis.md
-CORE_CLAIM=$(grep -A2 "## Core Claim" "$HYPOTHESIS_FILE" 2>/dev/null | tail -1 | xargs)
+CONTEXT="<EXTREMELY_IMPORTANT>\nYou have Research Loop superpowers.\n\n${SKILL_ESCAPED}\n\n--- WORKSPACE STATE ---\n${SESSION_ESCAPED}\n\nSkills available: research-loop, learn, explore, idea-selection, discover, loop, execution\nJust tell me what you want to research or understand. No commands needed.\n</EXTREMELY_IMPORTANT>"
 
-# Count experiments run
-RUNS=0
-if [ -f "$SESSION_PATH/autoresearch.jsonl" ]; then
-  RUNS=$(wc -l < "$SESSION_PATH/autoresearch.jsonl" 2>/dev/null || echo 0)
-fi
-
-# Emit context for Claude — this is added to Claude's context window
 cat <<EOF
-[Research Loop context]
-Active session: $LATEST_SESSION
-Core claim: $CORE_CLAIM
-Experiments run: $RUNS
-Session files:
-  hypothesis.md      → $HYPOTHESIS_FILE
-  knowledge_graph.md → $KG_FILE
-  lab_notebook.md    → $SESSION_PATH/lab_notebook.md
-  autoresearch.jsonl → $SESSION_PATH/autoresearch.jsonl
-
-Research Loop MCP tools available: research_ingest_paper, research_kg_query, research_update_kg, research_session_status
-Dashboard: http://localhost:4321
+{
+  "hookSpecificOutput": {
+    "hookEventName": "SessionStart",
+    "additionalContext": "${CONTEXT}"
+  }
+}
 EOF
-
-exit 0
