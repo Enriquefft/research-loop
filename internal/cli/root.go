@@ -39,6 +39,7 @@ Run 'research-loop <command> --help' for more information.`,
 	cmd.AddCommand(
 		newInitCmd(),
 		newStartCmd(),
+		newLoopCmd(),
 		newListCmd(),
 		newResumeCmd(),
 		newExportCmd(),
