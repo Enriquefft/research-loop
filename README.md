@@ -162,9 +162,19 @@ Full-screen terminal UI. Home, Ingest, Sessions, Dashboard. No browser required.
 One binary. No database. No account.
 
 ```bash
+# Install
 curl -fsSL https://research-loop.dev/install | sh
+
+# Initialize workspace
 research-loop init
+
+# Quickstart with karpathy/autoresearch (single-GPU overnight experiments)
+git clone https://github.com/karpathy/autoresearch
+cd autoresearch && uv run prepare.py        # one-time data prep
+
 research-loop start "https://arxiv.org/abs/2403.05821"
+# edit .research-loop/config.toml — set benchmark_command
+research-loop loop start --repo ./autoresearch
 ```
 
 Or build from source:
@@ -176,36 +186,46 @@ go build ./cmd/research-loop
 ./research-loop init
 ```
 
-> **Requirements:** Go 1.22+ (to build from source) · `claude` CLI or any OpenAI-compatible API key
+> **Requirements:** Go 1.22+ · `claude` CLI or any OpenAI-compatible API key · Python + [uv](https://docs.astral.sh/uv/) for autoresearch
 
 <br/>
 
 ## The magic moment
 
+Works out of the box with [karpathy/autoresearch](https://github.com/karpathy/autoresearch) — a single-GPU nanochat training setup designed for exactly this kind of autonomous overnight experimentation.
+
+```bash
+# 1. Clone the baseline
+git clone https://github.com/karpathy/autoresearch
+cd autoresearch && uv run prepare.py   # one-time data prep, ~2 min
+
+# 2. Ingest the paper and extract a hypothesis
+research-loop start "https://arxiv.org/abs/2403.05821"
+
+# 3. Configure the benchmark command
+#    In .research-loop/config.toml:
+#    benchmark_command = "uv run train.py > run.log 2>&1"
+
+# 4. Start the loop — runs overnight autonomously
+research-loop loop start --repo ./autoresearch
 ```
-$ research-loop start "https://arxiv.org/abs/2403.05821"
 
-Downloading paper... done (2.1s)
-Extracting hypothesis... done (8.4s)
+```
+  [HYPOTHESIZE]  Hypothesis loaded
+  [BENCHMARK]    Running baseline benchmark…
+  [BENCHMARK]    Baseline: val_bpb = 0.997900
 
-┌─────────────────────────────────────────────────────────────┐
-│ Hypothesis extracted                                        │
-│                                                             │
-│ Paper: GQA: Training Generalized Multi-Query Transformer    │
-│ Claim: Grouped-query attention reduces memory bandwidth     │
-│        during decoding while matching MHA quality with      │
-│        1/G of the KV cache memory.                          │
-│                                                             │
-│ Proposed experiment: Implement GQA on nanoGPT baseline     │
-│ and benchmark val_bpb on OpenWebText.                       │
-└─────────────────────────────────────────────────────────────┘
+  [PROPOSE #1]   Proposed: increase_matrix_lr — MATRIX_LR 0.04 → 0.06 based on
+                 underfit signal in baseline loss curve
+  [MUTATE  #1]   Applying mutation: increase_matrix_lr
+  [BENCHMARK #1] Benchmarking increase_matrix_lr… (5 min)
+  [ANNOTATE #1]  Writing causal annotation…
+         ✓  metric=0.991200  Δ-0.006700  node=increase_matrix_lr
+            Higher LR accelerated convergence in warmdown phase; gradient
+            norms suggest model was underfit at baseline LR.
 
-Approve this hypothesis and start the loop? [y/N] y
-
-Cloning baseline (nanoGPT)... done
-Running baseline... done  →  val_bpb: 3.42
-
-🔬 research-loop | run 1/∞ | baseline: 3.42 bpb | current: 3.38 bpb | Δ -0.04 ✓
+  [PROPOSE #2]   Proposed: depth_10 — increase DEPTH 8 → 10 for more capacity
+  …
 ```
 
 <br/>

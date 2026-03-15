@@ -92,7 +92,7 @@ func Init(workspaceRoot string) error {
 		filepath.Join(dir, "sessions"),
 		filepath.Join(dir, "library", "papers"),
 		filepath.Join(dir, "bundles"),
-		filepath.Join(dir, "hands"),
+		filepath.Join(dir, "skills"),
 	} {
 		if err := os.MkdirAll(sub, 0755); err != nil {
 			return fmt.Errorf("creating directory %s: %w", sub, err)
@@ -119,11 +119,25 @@ api_key_env  = "ANTHROPIC_API_KEY"
 # model = "claude-haiku-4-5"
 
 [metric]
-name              = "val_loss"
+# karpathy/autoresearch: val_bpb (bits per byte, lower is better)
+# Set benchmark_command to the command that runs your experiment.
+# The output must contain a line like:  val_bpb:  0.997900
+# For autoresearch: uv run train.py > run.log 2>&1
+name              = "val_bpb"
 direction         = "lower"
-baseline_command  = ""
 benchmark_command = ""
-timeout           = 300
+timeout           = 420
+
+# ── autoresearch (karpathy/autoresearch) quickstart ──────────────────────────
+# 1. Clone the repo:
+#      git clone https://github.com/karpathy/autoresearch
+# 2. Set up data (one-time, ~2 min):
+#      cd autoresearch && uv run prepare.py
+# 3. Set benchmark_command above to:
+#      uv run train.py > run.log 2>&1
+# 4. Set the repo path when starting the loop:
+#      research-loop loop start --repo ./autoresearch
+# ─────────────────────────────────────────────────────────────────────────────
 `
 	return os.WriteFile(cfgPath, []byte(defaultCfg), 0644)
 }

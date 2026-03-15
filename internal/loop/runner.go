@@ -138,7 +138,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		// ── PROPOSE ──────────────────────────────────────────────────────────
 		r.transition(StatePropose)
 		kgMD := r.readKG()
-		proposal, err := Propose(ctx, r.client, string(hypothesisMD), kgMD, r.lastRuns)
+		proposal, err := Propose(ctx, r.client, string(hypothesisMD), kgMD, r.lastRuns, r.opts.RepoDir)
 		if err != nil {
 			// Non-fatal: log and retry next iteration
 			r.emit(Progress{State: StatePropose, RunNumber: r.runNumber, Message: fmt.Sprintf("Propose failed: %v — retrying next iteration", err)})

@@ -15,10 +15,14 @@ import (
 	"github.com/research-loop/research-loop/internal/llm"
 )
 
-// metricRE matches lines like: METRIC val_loss=3.21  or  METRIC val_bpb = 1.04
-var metricRE = regexp.MustCompile(`(?i)METRIC\s+\S+=\s*([\d.]+)`)
+// metricRE matches the autoresearch/karpathy summary format: "val_bpb:          0.997900"
+// Also matches "val_loss: 3.21", "accuracy: 0.923", etc.
+var metricRE = regexp.MustCompile(`(?i)^(val_bpb|val_loss|val_ppl|accuracy|perplexity|[a-z_]+)\s*:\s*([\d.]+)`)
 
-// valueRE is a looser fallback: any bare float on a line by itself
+// metricAssignRE matches METRIC name=value (our own convention)
+var metricAssignRE = regexp.MustCompile(`(?i)METRIC\s+\S+=\s*([\d.]+)`)
+
+// valueRE is a bare float fallback
 var valueRE = regexp.MustCompile(`^\s*([\d]+\.[\d]+)\s*$`)
 
 // Proposal is what the Epistemic agent proposes to try next.
@@ -63,22 +67,30 @@ const proposePromptTemplate = `## Hypothesis
 
 %s
 
+## Current train.py constants (if autoresearch)
+
+%s
+
 ---
 
 Propose the next mutation to try. Respond in this exact format:
 
-NODE: <slug>
+NODE: <slug, e.g. increase_matrix_lr>
 DESCRIPTION: <what to change and why, 1-3 sentences>
-FILE: <relative path to the file to modify, e.g. model.py>
+FILE: <relative path to the file to modify, e.g. train.py>
 DIFF:
-<a unified diff OR the full new content of the changed section>
+<a unified diff OR the full new content of the changed section — for autoresearch, prefer showing only the changed constant lines>
 END_DIFF`
 
 // Propose asks the Epistemic agent to generate the next mutation to try.
-func Propose(ctx context.Context, client llm.Client, hypothesisMD, kgMD string, lastRuns []RunRecord) (Proposal, error) {
+// repoDir is passed so we can read current train.py constants for autoresearch.
+func Propose(ctx context.Context, client llm.Client, hypothesisMD, kgMD string, lastRuns []RunRecord, repoDir ...string) (Proposal, error) {
 	lastRunsText := formatLastRuns(lastRuns)
 
-	prompt := fmt.Sprintf(proposePromptTemplate, hypothesisMD, kgMD, lastRunsText)
+	// Read current hyperparameter constants from train.py if present (autoresearch pattern)
+	trainConstants := readTrainConstants(repoDir...)
+
+	prompt := fmt.Sprintf(proposePromptTemplate, hypothesisMD, kgMD, lastRunsText, trainConstants)
 	raw, err := client.Complete(ctx, proposeSystemPrompt, []llm.Message{
 		{Role: "user", Content: prompt},
 	})
@@ -183,68 +195,139 @@ func SaveDiff(repoDir, diffPath string) error {
 // ─── Benchmark ───────────────────────────────────────────────────────────────
 
 // RunBenchmark executes benchmarkCmd in repoDir with the given timeout.
-// It streams stdout/stderr to a buffer and parses the metric value.
+// Supports two patterns:
+//
+//  1. Plain command: output is captured directly and parsed for metrics.
+//  2. autoresearch pattern: if benchmarkCmd ends with "> run.log 2>&1", the
+//     command is run via shell and the log file is read back for parsing.
+//     This matches karpathy/autoresearch's: uv run train.py > run.log 2>&1
 func RunBenchmark(repoDir, benchmarkCmd string, timeoutSecs int) MutationResult {
 	if timeoutSecs <= 0 {
-		timeoutSecs = 300
+		timeoutSecs = 360 // 5 min training + 1 min startup
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSecs)*time.Second)
 	defer cancel()
 
-	parts := strings.Fields(benchmarkCmd)
-	if len(parts) == 0 {
+	if benchmarkCmd == "" {
 		return MutationResult{Err: fmt.Errorf("benchmark_command is empty — set it in .research-loop/config.toml")}
 	}
 
-	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
-	cmd.Dir = repoDir
+	var output string
 
-	var buf strings.Builder
-	cmd.Stdout = &lineWriter{w: &buf}
-	cmd.Stderr = &lineWriter{w: &buf}
+	// Shell-redirect pattern — run via sh -c so redirection works
+	isShellRedirect := strings.Contains(benchmarkCmd, ">") || strings.Contains(benchmarkCmd, "|")
+	if isShellRedirect {
+		cmd := exec.CommandContext(ctx, "sh", "-c", benchmarkCmd)
+		cmd.Dir = repoDir
+		var buf strings.Builder
+		cmd.Stdout = &lineWriter{w: &buf}
+		cmd.Stderr = &lineWriter{w: &buf}
+		err := cmd.Run()
 
-	err := cmd.Run()
-	output := buf.String()
+		if ctx.Err() == context.DeadlineExceeded {
+			return MutationResult{BenchOutput: buf.String(), TimedOut: true,
+				Err: fmt.Errorf("benchmark timed out after %ds", timeoutSecs)}
+		}
 
-	if ctx.Err() == context.DeadlineExceeded {
-		return MutationResult{BenchOutput: output, TimedOut: true,
-			Err: fmt.Errorf("benchmark timed out after %ds", timeoutSecs)}
-	}
-	if err != nil {
-		return MutationResult{BenchOutput: output,
-			Err: fmt.Errorf("benchmark command failed: %w", err)}
+		// Read back the log file if redirected (e.g. "> run.log 2>&1")
+		logPath := extractLogPath(benchmarkCmd)
+		if logPath != "" {
+			if logData, readErr := os.ReadFile(filepath.Join(repoDir, logPath)); readErr == nil {
+				output = string(logData)
+			}
+		}
+		if output == "" {
+			output = buf.String()
+		}
+
+		if err != nil {
+			// Check for crash in log
+			val, raw, parseErr := parseMetric(output)
+			if parseErr != nil {
+				return MutationResult{BenchOutput: output,
+					Err: fmt.Errorf("benchmark command failed: %w", err)}
+			}
+			return MutationResult{MetricVal: val, MetricRaw: raw, BenchOutput: output}
+		}
+	} else {
+		// Direct command
+		parts := strings.Fields(benchmarkCmd)
+		cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
+		cmd.Dir = repoDir
+		var buf strings.Builder
+		cmd.Stdout = &lineWriter{w: &buf}
+		cmd.Stderr = &lineWriter{w: &buf}
+		err := cmd.Run()
+		output = buf.String()
+
+		if ctx.Err() == context.DeadlineExceeded {
+			return MutationResult{BenchOutput: output, TimedOut: true,
+				Err: fmt.Errorf("benchmark timed out after %ds", timeoutSecs)}
+		}
+		if err != nil {
+			return MutationResult{BenchOutput: output,
+				Err: fmt.Errorf("benchmark command failed: %w", err)}
+		}
 	}
 
 	val, raw, parseErr := parseMetric(output)
 	if parseErr != nil {
 		return MutationResult{BenchOutput: output, Err: parseErr}
 	}
-
-	return MutationResult{
-		MetricVal: val,
-		MetricRaw: raw,
-		BenchOutput: output,
-	}
+	return MutationResult{MetricVal: val, MetricRaw: raw, BenchOutput: output}
 }
 
-// parseMetric scans benchmark output for a METRIC line and returns the value.
+// extractLogPath pulls the log filename from a shell redirect like "> run.log 2>&1"
+func extractLogPath(cmd string) string {
+	re := regexp.MustCompile(`>\s*([^\s&|]+)`)
+	if m := re.FindStringSubmatch(cmd); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// parseMetric scans benchmark output for a metric value. Priority order:
+//  1. autoresearch format: "val_bpb:          0.997900" (after the "---" summary block)
+//  2. METRIC name=value (research-loop convention)
+//  3. bare float fallback (last one wins)
 func parseMetric(output string) (float64, string, error) {
+	// Pass 1: look for the autoresearch "---" summary block
+	// Lines after "---" like "val_bpb:  0.997900" are canonical
+	inSummary := false
 	scanner := bufio.NewScanner(strings.NewReader(output))
 	for scanner.Scan() {
 		line := scanner.Text()
-		if m := metricRE.FindStringSubmatch(line); m != nil {
+		if strings.TrimSpace(line) == "---" {
+			inSummary = true
+			continue
+		}
+		if inSummary {
+			if m := metricRE.FindStringSubmatch(line); m != nil {
+				val, err := strconv.ParseFloat(m[2], 64)
+				if err == nil {
+					return val, m[2], nil
+				}
+			}
+		}
+	}
+
+	// Pass 2: METRIC name=value anywhere in output
+	scanner2 := bufio.NewScanner(strings.NewReader(output))
+	for scanner2.Scan() {
+		line := scanner2.Text()
+		if m := metricAssignRE.FindStringSubmatch(line); m != nil {
 			val, err := strconv.ParseFloat(m[1], 64)
 			if err == nil {
 				return val, m[1], nil
 			}
 		}
 	}
-	// Fallback: look for a bare float on its own line (last one wins)
+
+	// Pass 3: bare float on its own line (last one wins)
 	var lastFloat string
-	scanner2 := bufio.NewScanner(strings.NewReader(output))
-	for scanner2.Scan() {
-		line := scanner2.Text()
-		if m := valueRE.FindStringSubmatch(line); m != nil {
+	scanner3 := bufio.NewScanner(strings.NewReader(output))
+	for scanner3.Scan() {
+		if m := valueRE.FindStringSubmatch(scanner3.Text()); m != nil {
 			lastFloat = m[1]
 		}
 	}
@@ -254,8 +337,46 @@ func parseMetric(output string) (float64, string, error) {
 			return val, lastFloat, nil
 		}
 	}
-	return 0, "", fmt.Errorf("no METRIC value found in benchmark output.\n" +
-		"Add a line like: METRIC val_loss=3.21\nto your benchmark script's stdout")
+
+	return 0, "", fmt.Errorf("no metric value found in benchmark output\n" +
+		"For autoresearch: output should contain a '---' summary with 'val_bpb: 0.997'\n" +
+		"For custom scripts: print a line like 'METRIC val_loss=3.21'")
+}
+
+// readTrainConstants extracts the hyperparameter constant block from train.py.
+// Returns a short excerpt of the ALLCAPS constants section, or empty string.
+func readTrainConstants(repoDir ...string) string {
+	if len(repoDir) == 0 || repoDir[0] == "" {
+		return "(no repo dir provided)"
+	}
+	data, err := os.ReadFile(filepath.Join(repoDir[0], "train.py"))
+	if err != nil {
+		return "(train.py not found)"
+	}
+	// Extract lines between "Hyperparameters" comment and the next "---" comment block
+	lines := strings.Split(string(data), "\n")
+	var out []string
+	inHyper := false
+	for _, line := range lines {
+		if strings.Contains(line, "Hyperparameters") {
+			inHyper = true
+			continue
+		}
+		if inHyper {
+			if strings.HasPrefix(strings.TrimSpace(line), "# ---") || strings.HasPrefix(strings.TrimSpace(line), "# Setup") {
+				break
+			}
+			// Only emit lines that look like constants (UPPER_CASE = value)
+			trimmed := strings.TrimSpace(line)
+			if len(trimmed) > 0 && trimmed[0] != '#' && strings.Contains(trimmed, "=") {
+				out = append(out, line)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return "(no constants found in train.py)"
+	}
+	return strings.Join(out, "\n")
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
