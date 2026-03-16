@@ -13,5 +13,9 @@ agent-sdk/dist/
 *.env
 .research-loop/credentials.toml
 
+# Nix / direnv
+.direnv/
+result
+
 # Research Loop runtime state (optional — some teams commit these)
 # .research-loop/library/papers/*.pdf
